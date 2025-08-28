@@ -915,8 +915,44 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
     throw new Error('Method not implemented.');
   }
 
-  sendImage(request: MessageImageRequest) {
-    throw new AvailableInPlusVersion();
+  async sendImage(request: MessageImageRequest) {
+    const jid = toJID(this.ensureSuffix(request.chatId));
+    
+    let buffer: Buffer;
+    let mimetype: string;
+    let filename: string | undefined;
+
+    if ('url' in request.file) {
+      buffer = await this.fetch(request.file.url);
+      mimetype = request.file.mimetype || 'image/jpeg';
+      filename = request.file.filename;
+    } else {
+      buffer = Buffer.from(request.file.data, 'base64');
+      mimetype = request.file.mimetype || 'image/jpeg';
+      filename = request.file.filename;
+    }
+
+    const media = new messages.Media({
+      content: new Uint8Array(buffer),
+      type: messages.MediaType.IMAGE,
+      mimetype: mimetype,
+      filename: filename,
+    });
+
+    const message = new messages.MessageRequest({
+      jid: jid,
+      session: this.session,
+      media: media,
+      replyTo: getMessageIdFromSerialized(request.reply_to),
+    });
+
+    if (request.caption) {
+      message.text = request.caption;
+    }
+
+    const response = await promisify(this.client.SendMessage)(message);
+    const data = response.toObject();
+    return this.messageResponse(jid, data);
   }
 
   sendFile(request: MessageFileRequest) {
