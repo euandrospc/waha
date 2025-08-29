@@ -955,12 +955,88 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
     return this.messageResponse(jid, data);
   }
 
-  sendFile(request: MessageFileRequest) {
-    throw new AvailableInPlusVersion();
+  async sendFile(request: MessageFileRequest) {
+    const jid = toJID(this.ensureSuffix(request.chatId));
+    
+    let buffer: Buffer;
+    let mimetype: string;
+    let filename: string | undefined;
+
+    if ('url' in request.file) {
+      buffer = await this.fetch(request.file.url);
+      mimetype = request.file.mimetype || 'application/octet-stream';
+      filename = request.file.filename;
+    } else {
+      buffer = Buffer.from(request.file.data, 'base64');
+      mimetype = request.file.mimetype || 'application/octet-stream';
+      filename = request.file.filename;
+    }
+
+    const media = new messages.Media({
+      content: new Uint8Array(buffer),
+      type: messages.MediaType.DOCUMENT,
+      mimetype: mimetype,
+      filename: filename,
+    });
+
+    const message = new messages.MessageRequest({
+      jid: jid,
+      session: this.session,
+      media: media,
+      replyTo: getMessageIdFromSerialized(request.reply_to),
+    });
+
+    if (request.caption) {
+      message.text = request.caption;
+    }
+
+    const response = await promisify(this.client.SendMessage)(message);
+    const data = response.toObject();
+    return this.messageResponse(jid, data);
   }
 
-  sendVoice(request: MessageVoiceRequest) {
-    throw new AvailableInPlusVersion();
+  async sendVoice(request: MessageVoiceRequest) {
+    const jid = toJID(this.ensureSuffix(request.chatId));
+    
+    let buffer: Buffer;
+    let mimetype: string;
+    let filename: string | undefined;
+
+    if ('url' in request.file) {
+      buffer = await this.fetch(request.file.url);
+      mimetype = request.file.mimetype || 'audio/ogg';
+      filename = undefined; 
+    } else {
+      buffer = Buffer.from(request.file.data, 'base64');
+      mimetype = request.file.mimetype || 'audio/ogg';
+      filename = request.file.filename;
+    }
+
+    let audioInfo: messages.AudioInfo | undefined;
+    if ('duration' in request.file && typeof request.file.duration === 'number') {
+      audioInfo = new messages.AudioInfo({
+        duration: request.file.duration,
+      });
+    }
+
+    const media = new messages.Media({
+      content: new Uint8Array(buffer),
+      type: messages.MediaType.AUDIO,
+      mimetype: mimetype,
+      filename: filename,
+      audio: audioInfo,
+    });
+
+    const message = new messages.MessageRequest({
+      jid: jid,
+      session: this.session,
+      media: media,
+      replyTo: getMessageIdFromSerialized(request.reply_to),
+    });
+
+    const response = await promisify(this.client.SendMessage)(message);
+    const data = response.toObject();
+    return this.messageResponse(jid, data);
   }
 
   sendLinkCustomPreview(

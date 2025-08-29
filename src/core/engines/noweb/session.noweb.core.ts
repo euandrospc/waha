@@ -772,7 +772,6 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
 
     this.logger.info(`Requesting pairing code for '${phoneNumber}'...`);
     const code: string = await this.sock.requestPairingCode(phoneNumber);
-    // show it as ABCD-ABCD
     const parts = splitAt(code, 4);
     const codeRepr = parts.join('-');
     this.logger.info(`Your code: ${codeRepr}`);
@@ -808,11 +807,11 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
     return true;
   }
 
-  protected setProfilePicture(file: BinaryFile | RemoteFile): Promise<boolean> {
+  protected async setProfilePicture(file: BinaryFile | RemoteFile): Promise<boolean> {
     throw new AvailableInPlusVersion();
   }
 
-  protected deleteProfilePicture(): Promise<boolean> {
+  protected async deleteProfilePicture(): Promise<boolean> {
     throw new AvailableInPlusVersion();
   }
 
@@ -911,22 +910,108 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
     return await this.sock.sendMessage(request.chatId, message, options);
   }
 
-  sendImage(request: MessageImageRequest) {
-    throw new AvailableInPlusVersion();
+  async sendImage(request: MessageImageRequest) {
+    const chatId = toJID(this.ensureSuffix(request.chatId));
+    
+    let media: any;
+    if ('url' in request.file) {
+      const response = await fetch(request.file.url);
+      const arrayBuffer = await response.arrayBuffer();
+      media = {
+        image: new Uint8Array(arrayBuffer),
+        caption: request.caption,
+        mimetype: request.file.mimetype || 'image/jpeg',
+        fileName: request.file.filename,
+      };
+    } else {
+      const binaryString = atob(request.file.data);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      media = {
+        image: bytes,
+        caption: request.caption,
+        mimetype: request.file.mimetype || 'image/jpeg',
+        fileName: request.file.filename,
+      };
+    }
+
+    const options = await this.getMessageOptions(request);
+    return this.sock.sendMessage(chatId, media, options);
   }
 
-  sendFile(request: MessageFileRequest) {
-    throw new AvailableInPlusVersion();
+  async sendFile(request: MessageFileRequest) {
+    const chatId = toJID(this.ensureSuffix(request.chatId));
+    
+    let media: any;
+    if ('url' in request.file) {
+      const response = await fetch(request.file.url);
+      const arrayBuffer = await response.arrayBuffer();
+      media = {
+        document: new Uint8Array(arrayBuffer),
+        caption: request.caption,
+        mimetype: request.file.mimetype || 'application/octet-stream',
+        fileName: request.file.filename || 'document',
+      };
+    } else {
+      const binaryString = atob(request.file.data);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      media = {
+        document: bytes,
+        caption: request.caption,
+        mimetype: request.file.mimetype || 'application/octet-stream',
+        fileName: request.file.filename || 'document',
+      };
+    }
+
+    const options = await this.getMessageOptions(request);
+    return this.sock.sendMessage(chatId, media, options);
   }
 
-  sendVoice(request: MessageVoiceRequest) {
-    throw new AvailableInPlusVersion();
+  async sendVoice(request: MessageVoiceRequest) {
+    const chatId = toJID(this.ensureSuffix(request.chatId));
+    
+    let media: any;
+    if ('url' in request.file) {
+      const response = await fetch(request.file.url);
+      const arrayBuffer = await response.arrayBuffer();
+      media = {
+        audio: new Uint8Array(arrayBuffer),
+        mimetype: request.file.mimetype || 'audio/ogg; codecs=opus',
+        ptt: true,
+      };
+    } else {
+      const binaryString = atob(request.file.data);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      media = {
+        audio: bytes,
+        mimetype: request.file.mimetype || 'audio/ogg; codecs=opus',
+        ptt: true,
+        fileName: request.file.filename,
+      };
+    }
+
+    const options = await this.getMessageOptions(request);
+    return this.sock.sendMessage(chatId, media, options);
   }
 
-  sendLinkCustomPreview(
+  async sendLinkCustomPreview(
     request: MessageLinkCustomPreviewRequest,
   ): Promise<any> {
-    throw new AvailableInPlusVersion();
+    const chatId = toJID(this.ensureSuffix(request.chatId));
+    const message = {
+      text: request.text,
+      linkPreview: this.getLinkPreview(request),
+    };
+    const options = await this.getMessageOptions(request);
+    return this.sock.sendMessage(chatId, message, options);
   }
 
   protected async uploadMedia(
@@ -953,7 +1038,7 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
     );
   }
 
-  sendList(request: SendListRequest): Promise<any> {
+  async sendList(request: SendListRequest): Promise<any> {
     throw new AvailableInPlusVersion();
   }
 
@@ -1002,10 +1087,8 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
       return;
     }
 
-    // Send read
     await this.sock.readMessages(keys);
 
-    // Emit events for our reads
     const updates = keys.map((key) => ({
       key: key,
       update: { status: AckToStatus(WAMessageAck.READ) },
@@ -1098,7 +1181,6 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
       if (!serverId) {
         const msg = await this.store.getMessageById(key.remoteJid, key.id);
         if (msg) {
-          // @ts-ignore
           serverId = Number(msg.key.server_id);
         }
       }
@@ -1727,9 +1809,6 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
     }
   }
 
-  /**
-   * Channels methods
-   */
   public searchChannelsByView(
     query: ChannelSearchByView,
   ): Promise<ChannelListResult> {
