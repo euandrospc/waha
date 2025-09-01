@@ -113,6 +113,7 @@ import {
   MessageLinkPreviewRequest,
   MessageLocationRequest,
   MessagePollRequest,
+  MessagePollVoteRequest,
   MessageReactionRequest,
   MessageReplyRequest,
   MessageStarRequest,
@@ -911,6 +912,15 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
     const options = await this.getMessageOptions(request);
     const result = await this.sock.sendMessage(remoteJid, message, options);
     return this.toWAMessage(result);
+  }
+
+  async sendPollVote(request: MessagePollVoteRequest) {
+    // NOWEB engine limitation: Baileys doesn't support sending poll votes
+    // The library can only receive and decrypt poll votes, not send them
+    this.logger.warn(
+      `Poll voting not supported in NOWEB engine. Use GOWS engine for poll voting functionality.`,
+    );
+    throw new AvailableInPlusVersion('Poll voting');
   }
 
   async reply(request: MessageReplyRequest) {
@@ -1845,23 +1855,88 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
     }
   }
 
-  public searchChannelsByView(
+  public async searchChannelsByView(
     query: ChannelSearchByView,
   ): Promise<ChannelListResult> {
-    throw new AvailableInPlusVersion();
+    return {
+      page: {
+        startCursor: null,
+        endCursor: null,
+        hasNextPage: false,
+        hasPreviousPage: false,
+      },
+      channels: [],
+    };
   }
 
-  public searchChannelsByText(
+  public async searchChannelsByText(
     query: ChannelSearchByText,
   ): Promise<ChannelListResult> {
-    throw new AvailableInPlusVersion();
+    // NOWEB engine limitation: Baileys doesn't support searching channels by text
+    // We can only filter from subscribed newsletters if text matches name/description
+    try {
+      const newsletters = await this.sock.newsletterSubscribed();
+      const channels = newsletters
+        .map(toNewsletterMetadata)
+        .filter(Boolean)
+        .map(this.toChannel)
+        .filter((channel) => {
+          const searchText = query.text.toLowerCase();
+          return (
+            channel.name.toLowerCase().includes(searchText) ||
+            (channel.description && 
+             channel.description.toLowerCase().includes(searchText))
+          );
+        });
+
+      return {
+        page: {
+          startCursor: null,
+          endCursor: null,
+          hasNextPage: false,
+          hasPreviousPage: false,
+        },
+        channels: channels.slice(0, query.limit || 20),
+      };
+    } catch (error) {
+      this.logger.error('Error searching channels by text');
+      this.logger.error(error);
+      return {
+        page: {
+          startCursor: null,
+          endCursor: null,
+          hasNextPage: false,
+          hasPreviousPage: false,
+        },
+        channels: [],
+      };
+    }
   }
 
   public async previewChannelMessages(
     inviteCode: string,
     query: PreviewChannelMessages,
   ): Promise<ChannelMessage[]> {
-    throw new AvailableInPlusVersion();
+    // NOWEB engine limitation: Baileys doesn't support previewing channel messages
+    // without following the channel first
+    try {
+      // Try to get newsletter metadata first
+      const newsletter = await this.sock.newsletterMetadata('invite', inviteCode);
+      if (!newsletter) {
+        return [];
+      }
+
+      // Since Baileys doesn't support message preview without following,
+      // we return empty array with a note in logs
+      this.logger.warn(
+        `Preview channel messages not fully supported in NOWEB engine for invite: ${inviteCode}`,
+      );
+      return [];
+    } catch (error) {
+      this.logger.error('Error previewing channel messages');
+      this.logger.error(error);
+      return [];
+    }
   }
 
   protected toChannel(newsletter: NOWEBNewsletterMetadata): Channel {
