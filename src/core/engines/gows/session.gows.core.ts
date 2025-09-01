@@ -41,7 +41,6 @@ import {
 } from '@waha/core/engines/noweb/session.noweb.core';
 import { extractMediaContent } from '@waha/core/engines/noweb/utils';
 import {
-  AvailableInPlusVersion,
   NotImplementedByEngineError,
 } from '@waha/core/exceptions';
 import { IMediaEngineProcessor } from '@waha/core/media/IMediaEngineProcessor';
@@ -712,12 +711,36 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
     return true;
   }
 
-  protected setProfilePicture(file: BinaryFile | RemoteFile): Promise<boolean> {
-    throw new AvailableInPlusVersion();
+  protected async setProfilePicture(file: BinaryFile | RemoteFile): Promise<boolean> {
+    let fileData: Uint8Array;
+    if ('url' in file) {
+      const response = await fetch(file.url);
+      const arrayBuffer = await response.arrayBuffer();
+      fileData = new Uint8Array(arrayBuffer);
+    } else {
+      const buffer = Buffer.from(file.data, 'base64');
+      fileData = new Uint8Array(buffer);
+    }
+
+    const request = new messages.SetProfilePictureRequest({
+      session: this.session,
+      picture: fileData,
+    });
+    const response = await promisify(this.client.SetProfilePicture)(request);
+    response.toObject();
+    return true;
   }
 
-  protected deleteProfilePicture(): Promise<boolean> {
-    throw new AvailableInPlusVersion();
+  protected async deleteProfilePicture(): Promise<boolean> {
+    // GOWS doesn't have a specific deleteProfilePicture method,
+    // but we can set an empty profile picture to effectively delete it
+    const request = new messages.SetProfilePictureRequest({
+      session: this.session,
+      picture: new Uint8Array(),
+    });
+    const response = await promisify(this.client.SetProfilePicture)(request);
+    response.toObject();
+    return true;
   }
 
   /**
@@ -797,12 +820,60 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
     return this.messageResponse(jid, data);
   }
 
-  sendPollVote(request: MessagePollVoteRequest) {
-    throw new AvailableInPlusVersion('Poll voting');
+  async sendPollVote(request: MessagePollVoteRequest) {
+    const jid = toJID(this.ensureSuffix(request.chatId));
+    
+    const pollVoteMessage = new messages.PollVoteMessage({
+      pollMessageId: request.pollMessageId,
+      options: request.votes,
+    });
+
+    // Set pollServerId if provided (for channels)
+    if (request.pollServerId) {
+      pollVoteMessage.pollServerId = request.pollServerId;
+    }
+
+    const message = new messages.MessageRequest({
+      jid: jid,
+      session: this.session,
+      pollVote: pollVoteMessage,
+    });
+
+    const response = await promisify(this.client.SendMessage)(message);
+    const data = response.toObject();
+    return this.messageResponse(jid, data);
   }
 
-  sendList(request: SendListRequest): Promise<any> {
-    throw new AvailableInPlusVersion();
+  async sendList(request: SendListRequest): Promise<any> {
+    const jid = toJID(request.chatId);
+    
+    const sections = request.message.sections.map(section => new messages.Section({
+      title: section.title,
+      rows: section.rows.map(row => new messages.Row({
+        title: row.title,
+        description: row.description || '',
+        rowId: row.rowId,
+      })),
+    }));
+
+    const listMessage = new messages.ListMessage({
+      title: request.message.title,
+      description: request.message.description || '',
+      button: request.message.button,
+      footer: request.message.footer || '',
+      sections: sections,
+    });
+
+    const message = new messages.MessageRequest({
+      jid: jid,
+      session: this.session,
+      replyTo: getMessageIdFromSerialized(request.reply_to),
+      list: listMessage,
+    });
+    
+    const response = await promisify(this.client.SendMessage)(message);
+    const data = response.toObject();
+    return this.messageResponse(jid, data);
   }
 
   public async deleteMessage(chatId: string, messageId: string) {
@@ -1039,10 +1110,27 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
     return this.messageResponse(jid, data);
   }
 
-  sendLinkCustomPreview(
+  async sendLinkCustomPreview(
     request: MessageLinkCustomPreviewRequest,
   ): Promise<any> {
-    throw new AvailableInPlusVersion();
+    const jid = toJID(request.chatId);
+    
+    // Create message with custom link preview
+    const message = new messages.MessageRequest({
+      jid: jid,
+      session: this.session,
+      text: request.text,
+      linkPreview: true, // Enable link preview
+      replyTo: getMessageIdFromSerialized(request.reply_to),
+    });
+    
+    // Note: GOWS may handle custom link preview data differently
+    // This implementation sends the text with link preview enabled
+    // The preview data from request.preview may need specific GOWS handling
+    
+    const response = await promisify(this.client.SendMessage)(message);
+    const data = response.toObject();
+    return this.messageResponse(jid, data);
   }
 
   reply(request: MessageReplyRequest) {
@@ -1469,26 +1557,112 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
     };
   }
 
-  /**
-   * Channels methods
-   */
-  public searchChannelsByView(
+  public async searchChannelsByView(
     query: ChannelSearchByView,
   ): Promise<ChannelListResult> {
-    throw new AvailableInPlusVersion();
+    const searchPage = new messages.SearchPage({
+      limit: query.limit || 20,
+      startCursor: query.startCursor || '',
+    });
+    
+    const request = new messages.SearchNewslettersByViewRequest({
+      session: this.session,
+      page: searchPage,
+      view: query.view,
+      categories: query.categories || [],
+      countries: query.countries || [],
+    });
+    
+    const response = await promisify(this.client.SearchNewslettersByView)(request);
+    const data = response.toObject();
+    
+    const channels = (data.newsletters?.newsletters || []).map(newsletter => ({
+      id: newsletter.id || '',
+      name: newsletter.name || '',
+      description: newsletter.description || '',
+      invite: newsletter.invite || '',
+      preview: newsletter.preview || '',
+      picture: newsletter.picture || '',
+      verified: newsletter.verified || false,
+      subscribersCount: newsletter.subscriberCount || 0,
+    }));
+    
+    return {
+      page: {
+        startCursor: data.page?.startCursor || null,
+        endCursor: data.page?.endCursor || null,
+        hasNextPage: data.page?.hasNextPage || false,
+        hasPreviousPage: data.page?.hasPreviousPage || false,
+      },
+      channels: channels,
+    };
   }
 
-  public searchChannelsByText(
+  public async searchChannelsByText(
     query: ChannelSearchByText,
   ): Promise<ChannelListResult> {
-    throw new AvailableInPlusVersion();
+    const searchPage = new messages.SearchPage({
+      limit: query.limit || 20,
+      startCursor: query.startCursor || '',
+    });
+    
+    const request = new messages.SearchNewslettersByTextRequest({
+      session: this.session,
+      page: searchPage,
+      text: query.text,
+      categories: query.categories || [],
+    });
+    
+    const response = await promisify(this.client.SearchNewslettersByText)(request);
+    const data = response.toObject();
+    
+    const channels = (data.newsletters?.newsletters || []).map(newsletter => ({
+      id: newsletter.id || '',
+      name: newsletter.name || '',
+      description: newsletter.description || '',
+      invite: newsletter.invite || '',
+      preview: newsletter.preview || '',
+      picture: newsletter.picture || '',
+      verified: newsletter.verified || false,
+      subscribersCount: newsletter.subscriberCount || 0,
+    }));
+    
+    return {
+      page: {
+        startCursor: data.page?.startCursor || null,
+        endCursor: data.page?.endCursor || null,
+        hasNextPage: data.page?.hasNextPage || false,
+        hasPreviousPage: data.page?.hasPreviousPage || false,
+      },
+      channels: channels,
+    };
   }
 
   public async previewChannelMessages(
     inviteCode: string,
     query: PreviewChannelMessages,
   ): Promise<ChannelMessage[]> {
-    throw new AvailableInPlusVersion();
+    const request = new messages.GetNewsletterMessagesByInviteRequest({
+      session: this.session,
+      invite: inviteCode,
+      limit: query.limit || 10,
+    });
+    
+    const response = await promisify(this.client.GetNewsletterMessagesByInvite)(request);
+    const data = response.toObject();
+    
+    // Parse the JSON data response
+    try {
+      const parsedData = JSON.parse(data.data || '[]');
+      return parsedData?.map((msg: any) => ({
+        message: msg,
+        reactions: msg.reactions || {},
+        viewCount: msg.viewCount || 0,
+      })) || [];
+    } catch (e) {
+      this.logger.warn('Failed to parse channel messages data');
+      return [];
+    }
   }
 
   protected toChannel(newsletter: messages.Newsletter): Channel {
