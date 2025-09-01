@@ -55,6 +55,7 @@ import {
   ToGroupV2UpdateEvent,
 } from '@waha/core/engines/noweb/groups.noweb';
 import { sendButtonMessage } from '@waha/core/engines/noweb/noweb.buttons';
+import { sendListMessage } from '@waha/core/engines/noweb/noweb.lists';
 import {
   NOWEBNewsletterMetadata,
   toNewsletterMetadata,
@@ -808,11 +809,22 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
   }
 
   protected async setProfilePicture(file: BinaryFile | RemoteFile): Promise<boolean> {
-    throw new AvailableInPlusVersion();
+    let buffer: any;
+    if ('url' in file) {
+      const response = await fetch(file.url);
+      const arrayBuffer = await response.arrayBuffer();
+      buffer = Buffer.Buffer.from(arrayBuffer);
+    } else {
+      buffer = Buffer.Buffer.from(file.data, 'base64');
+    }
+    
+    await this.sock.updateProfilePicture(this.getSessionMeInfo().id, buffer);
+    return true;
   }
 
   protected async deleteProfilePicture(): Promise<boolean> {
-    throw new AvailableInPlusVersion();
+    await this.sock.removeProfilePicture(this.getSessionMeInfo().id);
+    return true;
   }
 
   /**
@@ -1018,10 +1030,31 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
     file: RemoteFile | BinaryFile,
     type,
   ): Promise<any> {
-    if (file && ('url' in file || 'data' in file)) {
-      throw new AvailableInPlusVersion('Sending media (image, video, pdf)');
+    if (!file) {
+      return null;
     }
-    return;
+
+    let buffer: any;
+    if ('url' in file) {
+      const response = await fetch(file.url);
+      const arrayBuffer = await response.arrayBuffer();
+      buffer = new Uint8Array(arrayBuffer);
+    } else if ('data' in file) {
+      const binaryString = atob(file.data);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      buffer = bytes;
+    } else {
+      return null;
+    }
+
+    return {
+      [type]: buffer,
+      mimetype: file.mimetype,
+      fileName: file.filename,
+    };
   }
 
   async sendButtons(request: SendButtonsRequest) {
@@ -1039,7 +1072,10 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
   }
 
   async sendList(request: SendListRequest): Promise<any> {
-    throw new AvailableInPlusVersion();
+    const chatId = toJID(this.ensureSuffix(request.chatId));
+    const options = await this.getMessageOptions(request);
+    
+    return await sendListMessage(this.sock, chatId, request.message);
   }
 
   async sendLocation(request: MessageLocationRequest) {
